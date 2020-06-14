@@ -1,0 +1,22 @@
+[package]
+name = "shclient"
+version = "0.1.0"
+authors = ["Ken <kenakioreed@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+steer = {path="../steer"}
+egaku2d={path="../egaku2d"}
+seq_impulse = {path="../seq_impulse"}
+axgeom = "1.6"
+rayon ="*"
+dinotree_alg={git="https://github.com/tiby312/dinotree_alg"}
+duckduckgeo={git="https://github.com/tiby312/duckduckgeo"}
+
+[patch.'https://github.com/tiby312/dinotree_alg']
+dinotree_alg={path="../dinotree_alg"}
+
+[patch.'https://github.com/tiby312/duckduckgeo']
+duckduckgeo={path="../duckduckgeo"}
