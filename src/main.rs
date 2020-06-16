@@ -139,13 +139,13 @@ fn main(){
 
 
 
-#[derive(Eq,PartialEq,Copy,Clone)]
-struct PlayerId(u32);
+#[derive(Eq,PartialEq,Copy,Clone,Hash,Ord,PartialOrd)]
+struct PlayerId(u64);
 
 
 struct GameState{
     bots:Vec<Bot>,
-    players:Vec<(PlayerId,usize,Vec2<f32>)> //playerid, and index into the bot that the player controls
+    players:Vec<(PlayerId,Vec2<f32>)> //playerid, and index into the bot that the player controls
 }
 
 struct Game{
@@ -156,7 +156,10 @@ impl Game{
     fn new()->Game{
         unimplemented!()
     }
-    fn step(&mut self,moves:&[(PlayerId,Option<Vec2<f32>>)]){
+
+    fn step(&mut self,moves:&[(PlayerId,Option<Vec2<f32>>)],new_player:bool) ->Option<PlayerId>{
+        
+
 
         //TODO
         /////////////////
@@ -167,39 +170,26 @@ impl Game{
         //
         // MAKE THE PLAYER ID THE SAME THING AS THE BOT INDEX!!!!
         //
+        
         let state=&mut self.state;
-
-        for (mid,t) in moves.iter(){
-            if let Some((id,_,target))=state.players.iter_mut().find(|(id,_,_)|id==mid){
-                if let Some(new_target)=t{
-                    *target=*new_target;
-                }else{
-                    //do nothing
-                }
-            }else{
-                use std::collections::HashSet;
-                let index={
-                    let mut indicies:HashSet<_>=state.players.iter().map(|(_,a,_)|*a).collect();
-                    let h:HashSet<_>=(0..state.bots.len()).collect();
-
-                    let difference=h.difference(&indicies);
-                    let mut vv:Vec<_>=difference.map(|a|*a).collect();
-                    vv.sort();
-                    vv[0]
-                };
-
-                if let Some(new_t)=t{
-                    state.players.push((*mid,index,*new_t));
-                    //new player with target.
-                }else{
-                    let nn=state.bots[index].pos;
-                    state.players.push((*mid,index,nn));
-                    //new player with no target
-                }
-                
-            }
-
+        if new_player{
+            use std::collections::HashSet;
+            let pid={
+                let mut indicies:HashSet<_>=state.players.iter().map(|(a,_)|*a).collect();
+                let h:HashSet<_>=(0..state.bots.len()).map(|a|PlayerId(a as u64)).collect();
+    
+                let difference=h.difference(&indicies);
+                let mut vv:Vec<_>=difference.map(|a|*a).collect();
+                vv.sort();
+                vv[0]
+            };
+            state.players.push((pid,state.bots[pid.0 as usize].pos));
+            Some(pid)
+        }else{
+            None
         }
+
+
     }
 }
 
