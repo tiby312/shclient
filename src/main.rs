@@ -159,17 +159,20 @@ impl Game{
 
     fn step(&mut self,moves:&[(PlayerId,Option<Vec2<f32>>)],new_player:bool) ->Option<PlayerId>{
         
-
-
-        //TODO
-        /////////////////
-        ///////////////
-        ////////////
-        ///////////
-        //
-        //
-        // MAKE THE PLAYER ID THE SAME THING AS THE BOT INDEX!!!!
-        //
+        use retain_mut::RetainMut;
+        self.state.players.retain_mut(|(p,t)|{
+            if let Some((_,newt))=moves.iter().find(|(a,_)|p==a){
+                if let &Some(newt)=newt{
+                    *t=newt;
+                }else{
+                    //do nothing
+                }
+                true
+            }else{
+                false
+            }
+        });
+        
         
         let state=&mut self.state;
         if new_player{
