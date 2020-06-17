@@ -12,6 +12,7 @@ egaku2d={path="../egaku2d"}
 seq_impulse = {path="../seq_impulse"}
 axgeom = "1.6"
 rayon ="*"
+retain_mut="*"
 dinotree_alg={git="https://github.com/tiby312/dinotree_alg"}
 duckduckgeo={git="https://github.com/tiby312/duckduckgeo"}
 
