@@ -153,10 +153,26 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Demo {
     };
 
 
+    //let mut stream = TcpStream::connect("127.0.0.1:34254")?;
+
+
+
     let mut mtarget=vec2(0.0,0.0);
 
     Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
+
+        /*
+        //todo
+        match stream.read_exact(buffer).unwrap(){
+            GameStateRequest=>{
+                //
+            },
+            Moves=>{
+
+            }
+        }*/
+
         
 
         if mouse_active{
