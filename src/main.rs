@@ -34,7 +34,7 @@ impl Demo {
 
 
 
-fn main(){
+fn main()-> Result<(), Box<dyn std::error::Error>> {
     let area = vec2(800*2, 600);
 
     let events_loop = glutin::event_loop::EventLoop::new();
@@ -43,7 +43,7 @@ fn main(){
     let mut sys = egaku2d::WindowedSystem::new(area.into(), &events_loop,"dinotree_alg demo");
 
     let r=rect(0.,area.x as f32,0.,area.y as f32);
-    let mut game=make_demo(r.inner_try_into().unwrap(),&mut sys.canvas_mut());
+    let mut game=make_demo(r.inner_try_into().unwrap(),&mut sys.canvas_mut())?;
 
 
 
@@ -121,18 +121,25 @@ fn main(){
 
 
 
+use std::net::TcpStream;
+use steer::net::*;
 
-
-
-pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Demo {
+pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
     let window_dim:Rect<F32n>=dim;//rect(0.0,800.0,0.0,600.0*2.0).inner_try_into().unwrap();
 
 
+    let myplayerid=steer::net::PlayerID(0);
     
     let mut game=game::Game::new();
-    let playerid=game.step(&[],true,canvas).unwrap();
+    
+    
+    let mut stream = TcpStream::connect("localhost:3333")?;
+    ClientToServer::JoinRequest(0,[1;8]).send(&mut stream)?;
+    println!("sent join request");
 
-        
+    let response=ServerToClient::receive(&mut stream)?;
+    dbg!(response);
+    dbg!("tada!!!!");
 
     
 
@@ -153,13 +160,12 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Demo {
     };
 
 
-    //let mut stream = TcpStream::connect("127.0.0.1:34254")?;
 
 
 
     let mut mtarget=vec2(0.0,0.0);
 
-    Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
+    let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
         /*
@@ -180,18 +186,18 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Demo {
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
             
-            let p=game.get_state().bots[playerid.get()].body.pos;
+            let p=game.get_state().bots[myplayerid.0].body.pos;
 
             mtarget=-half+target+p;
         }
 
 
-        let _ = game.step(&[(playerid,mtarget)],false,canvas);
+        game.step(&[(myplayerid,mtarget)],canvas);
 
 
 
         //convert game coordinate to window coordinate
-        let p=game.get_state().bots[playerid.get()].body.pos;
+        let p=game.get_state().bots[myplayerid.0].body.pos;
 
         let kk=-(p.inner_into::<f32>())+vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
         canvas.set_global_offset( kk.into());
@@ -248,6 +254,7 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Demo {
         }
         lines.send_and_uniforms(canvas).with_color([0.0,0.0,0.5,1.0]).draw();
               
-    })
+    });
+    Ok(d)
 }
 

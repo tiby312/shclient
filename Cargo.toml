@@ -21,3 +21,7 @@ dinotree_alg={path="../dinotree_alg"}
 
 [patch.'https://github.com/tiby312/duckduckgeo']
 duckduckgeo={path="../duckduckgeo"}
+
+
+[patch.crates-io]
+axgeom={path="../axgeom"}
