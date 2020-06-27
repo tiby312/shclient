@@ -121,14 +121,86 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
 
 
+pub struct CommitManager{
+    count:u8,
+    moves:std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>,//The moves we are working though
+    current_targets:Vec<PlayerState>,
+    commits:Vec<Move> //for ourselves
+}
+impl CommitManager{
+    fn new()->CommitManager{
+        let moves=vec!().into_iter().peekable();
+        CommitManager{count:0,moves,current_targets:Vec::new(),commits:Vec::new()}
+    }
+    fn add_commit(&mut self,pos:Vec2<f32>){
+        self.commits.push(Move{target:pos,tick:self.count});
+    }
+
+    //call this 60 times a second
+    fn tick(&mut self,playerid:PlayerID,stream:&mut TcpStream,set_target:impl Fn(PlayerID)->Vec2<f32>)->Result<&[PlayerState],ProtErr>{
+        if self.count==0{    
+            //TODO This can happen in parallel with the below if its slow
+            ClientToServer::Commit(playerid,self.commits.clone()).send(stream);
+            self.commits.clear();
+
+            match ServerToClient::receive(stream)?{
+                ServerToClient::Moves(a)=>{
+                    assert!(self.moves.next().is_none());
+
+                    let mut p=a.into_iter().peekable();
+
+                    //As long as there are commits that are not moves
+                    while p.peek().and_then(|a|{if let CommitType::Move(_)=a.commit{None}else{Some(())}}).is_some(){
+                        let Commit{playerid,commit}=p.next().unwrap();
+                        match commit{
+                            CommitType::Join(name)=>{
+                                //handle
+                                let target=set_target(playerid);//game.bots[playerid.0 as usize].body.pos;
+                                self.current_targets.push(PlayerState{playerid,name,target})
+                            },
+                            CommitType::Quit()=>{
+                                let (index,_)=self.current_targets.iter().enumerate().find(|(i,e)|e.playerid==playerid).ok_or(ProtErr)?;
+                                self.current_targets.remove(index);
+
+                            },
+                            CommitType::Move(_)=>{
+                                unreachable!();
+                            }
+                        }
+                    }
+                    
+                    self.moves = p.map(|a|(a.playerid,a.commit.assume_move().unwrap())).collect::<Vec<_>>().into_iter().peekable();
+                },
+                _=>{
+                    return Err(ProtErr)
+                }
+            }
+        }
+
+        let count=self.count;
+        while self.moves.peek().and_then(|(_,a)|if a.tick==count{Some(())}else{None} ).is_some(){
+            let (playerid,m) = self.moves.next().unwrap();
+            let p=self.current_targets.iter_mut().find(|o|o.playerid==playerid).unwrap();
+            p.target=m.target;
+        }
+
+        self.count+=1;
+
+        Ok(&mut self.current_targets)
+    }
+}
+
+
+
+
 use std::net::TcpStream;
 use steer::net::*;
+use steer::game::PlayerState;
 
 pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
     let window_dim:Rect<F32n>=dim;//rect(0.0,800.0,0.0,600.0*2.0).inner_try_into().unwrap();
 
 
-    let myplayerid=steer::net::PlayerID(0);
     
     let mut game=game::Game::new();
     
@@ -137,15 +209,26 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
     ClientToServer::JoinRequest(0,[1;8]).send(&mut stream)?;
     println!("sent join request");
 
-    let response=ServerToClient::receive(&mut stream)?;
-    dbg!(response);
+    let myplayerid=match ServerToClient::receive(&mut stream)?{
+        ServerToClient::StartNewGame(playerid)=>{
+            playerid
+        },
+        ServerToClient::ReceiveGameState(state,playerid)=>{
+            game.state=state;
+            playerid
+        },
+        _=>{
+            panic!("error!");
+        }
+    };
+
     dbg!("tada!!!!");
 
     
 
     let wall_save={
-        let walls=&game.get_non_state().walls;
-        let grid_viewport=&game.get_non_state().grid_viewport;
+        let walls=&game.nonstate.walls;
+        let grid_viewport=&game.nonstate.grid_viewport;
         let mut squares=canvas.squares();
          for x in 0..walls.dim().x {
             for y in 0..walls.dim().y {
@@ -163,49 +246,38 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
 
 
 
-    let mut mtarget=vec2(0.0,0.0);
-
+    let mut commit_manager=CommitManager::new();
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
-        /*
-        //todo
-        match stream.read_exact(buffer).unwrap(){
-            GameStateRequest=>{
-                //
-            },
-            Moves=>{
-
-            }
-        }*/
-
-        
+        {   //TODO maybe do this in a different orer???
+            let player_moves=commit_manager.tick(myplayerid,&mut stream,|p|game.state.bots[p.0 as usize].body.pos).unwrap();
+            game.step(player_moves,canvas);
+        }
 
         if mouse_active{
             //convert window coordicate to game coordinate
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
-            
-            let p=game.get_state().bots[myplayerid.0].body.pos;
-
-            mtarget=-half+target+p;
+            let p=game.state.bots[myplayerid.0 as usize].body.pos;
+            let mtarget=-half+target+p;
+            commit_manager.add_commit(mtarget);
         }
 
 
-        game.step(&[(myplayerid,mtarget)],canvas);
 
 
 
         //convert game coordinate to window coordinate
-        let p=game.get_state().bots[myplayerid.0].body.pos;
+        let p=game.state.bots[myplayerid.0 as usize].body.pos;
 
         let kk=-(p.inner_into::<f32>())+vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
         canvas.set_global_offset( kk.into());
 
         
-        let grid_viewport=&game.get_non_state().grid_viewport;
-        let bots=&game.get_state().bots;
-        let radius=game.get_non_state().radius;
+        let grid_viewport=&game.nonstate.grid_viewport;
+        let bots=&game.state.bots;
+        let radius=game.nonstate.radius;
         let diameter=radius*2.0;
         wall_save.uniforms(canvas,grid_viewport.spacing).with_color([0.4,0.2,0.2,1.0]).draw();
 
