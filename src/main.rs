@@ -94,7 +94,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
                                 mouse_active=true;
                             }
                             glutin::event::ElementState::Released => {
-                                mouse_active=false;
+                                //mouse_active=true;
                             }
                         }
                     }
@@ -107,6 +107,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
                     k.clear_color([0.2, 0.8, 0.2]);
                     game.step(cursor.inner_try_into().unwrap(),mouse_active, k, false);
                     sys.swap_buffers();
+
+                    mouse_active=false;
                 }
             }
             _ => {}
@@ -128,25 +130,27 @@ pub struct CommitManager{
     commits:Vec<Move> //for ourselves
 }
 impl CommitManager{
-    fn new()->CommitManager{
+    fn new(playerid:PlayerID,name:[u8;8],set_target:impl Fn(PlayerID)->Vec2<f32>)->CommitManager{
+        let current_targets=vec!(PlayerState{playerid,name,target:set_target(playerid)});
         let moves=vec!().into_iter().peekable();
-        CommitManager{count:0,moves,current_targets:Vec::new(),commits:Vec::new()}
-    }
-    fn add_commit(&mut self,pos:Vec2<f32>){
-        self.commits.push(Move{target:pos,tick:self.count});
+        CommitManager{count:0,moves,current_targets,commits:Vec::new()}
     }
 
     //call this 60 times a second
-    fn tick(&mut self,playerid:PlayerID,stream:&mut TcpStream,set_target:impl Fn(PlayerID)->Vec2<f32>)->Result<&[PlayerState],ProtErr>{
+    fn tick(&mut self,commit:Option<Vec2<f32>>,playerid:PlayerID,stream:&mut TcpStream,set_target:impl Fn(PlayerID)->Vec2<f32>)->Result<&[PlayerState],ProtErr>{
+        
         if self.count==0{    
             //TODO This can happen in parallel with the below if its slow
-            ClientToServer::Commit(playerid,self.commits.clone()).send(stream);
+            println!("sending={:?}",&self.commits);
+            ClientToServer::Commit(playerid,self.commits.clone()).send(stream).unwrap();
+            println!("sent commits!");
             self.commits.clear();
 
             match ServerToClient::receive(stream)?{
                 ServerToClient::Moves(a)=>{
-                    assert!(self.moves.next().is_none());
-
+                    let x=self.moves.next();
+                    assert!(x.is_none(),"{:?}",x);
+                    println!("Received moves! {:?}",a);
                     let mut p=a.into_iter().peekable();
 
                     //As long as there are commits that are not moves
@@ -176,15 +180,22 @@ impl CommitManager{
                 }
             }
         }
+        if let Some(target)=commit{
+            self.commits.push(Move{target,tick:self.count});
+        }
 
         let count=self.count;
         while self.moves.peek().and_then(|(_,a)|if a.tick==count{Some(())}else{None} ).is_some(){
             let (playerid,m) = self.moves.next().unwrap();
+            println!("current targets={:?}",self.current_targets);
             let p=self.current_targets.iter_mut().find(|o|o.playerid==playerid).unwrap();
             p.target=m.target;
         }
 
         self.count+=1;
+        if self.count==12{ //200ms lag
+            self.count=0;
+        }
 
         Ok(&mut self.current_targets)
     }
@@ -209,6 +220,7 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
     ClientToServer::JoinRequest(0,[1;8]).send(&mut stream)?;
     println!("sent join request");
 
+    let name=[0u8;8];
     let myplayerid=match ServerToClient::receive(&mut stream)?{
         ServerToClient::StartNewGame(playerid)=>{
             playerid
@@ -246,24 +258,29 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
 
 
 
-    let mut commit_manager=CommitManager::new();
+    let mut commit_manager=CommitManager::new(myplayerid,name,|p|game.state.bots[p.0 as usize].body.pos);
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
-        {   //TODO maybe do this in a different orer???
-            let player_moves=commit_manager.tick(myplayerid,&mut stream,|p|game.state.bots[p.0 as usize].body.pos).unwrap();
-            game.step(player_moves,canvas);
-        }
+        
 
-        if mouse_active{
+        let commit=if mouse_active{
             //convert window coordicate to game coordinate
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
             let p=game.state.bots[myplayerid.0 as usize].body.pos;
             let mtarget=-half+target+p;
-            commit_manager.add_commit(mtarget);
-        }
+            //commit_manager.add_commit(mtarget);
+            Some(mtarget)
+        }else{
+            None
+        };
 
+
+        {   //TODO maybe do this in a different orer???
+            let player_moves=commit_manager.tick(commit,myplayerid,&mut stream,|p|game.state.bots[p.0 as usize].body.pos).unwrap();
+            game.step(player_moves,canvas);
+        }
 
 
 
