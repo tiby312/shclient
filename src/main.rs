@@ -32,9 +32,12 @@ impl Demo {
 }
 
 
-
+use std::env;
 
 fn main()-> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+
+
     let area = vec2(800*2, 600);
 
     let events_loop = glutin::event_loop::EventLoop::new();
@@ -43,7 +46,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let mut sys = egaku2d::WindowedSystem::new(area.into(), &events_loop,"dinotree_alg demo");
 
     let r=rect(0.,area.x as f32,0.,area.y as f32);
-    let mut game=make_demo(r.inner_try_into().unwrap(),&mut sys.canvas_mut())?;
+    let mut game=make_demo(args,r.inner_try_into().unwrap(),&mut sys.canvas_mut())?;
 
 
 
@@ -123,6 +126,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
 
 
+use steer::game::GameState;
+
 pub struct CommitManager{
     count:u8,
     moves:std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>,//The moves we are working though
@@ -130,14 +135,14 @@ pub struct CommitManager{
     commits:Vec<Move> //for ourselves
 }
 impl CommitManager{
-    fn new(playerid:PlayerID,name:[u8;8],set_target:impl Fn(PlayerID)->Vec2<f32>)->CommitManager{
-        let current_targets=vec!(PlayerState{playerid,name,target:set_target(playerid)});
+    fn new(playerid:PlayerID,name:[u8;8],game_state:&GameState)->CommitManager{
+        let current_targets=vec!(PlayerState{playerid,name,target:game_state.bots[playerid.0 as usize].body.pos});
         let moves=vec!().into_iter().peekable();
         CommitManager{count:0,moves,current_targets,commits:Vec::new()}
     }
 
     //call this 60 times a second
-    fn tick(&mut self,commit:Option<Vec2<f32>>,playerid:PlayerID,stream:&mut TcpStream,set_target:impl Fn(PlayerID)->Vec2<f32>)->Result<&[PlayerState],ProtErr>{
+    fn tick(&mut self,commit:Option<Vec2<f32>>,playerid:PlayerID,stream:&mut TcpStream,game_state:&GameState)->Result<&[PlayerState],ProtErr>{
         
         if self.count==0{    
             //TODO This can happen in parallel with the below if its slow
@@ -159,7 +164,7 @@ impl CommitManager{
                         match commit{
                             CommitType::Join(name)=>{
                                 //handle
-                                let target=set_target(playerid);//game.bots[playerid.0 as usize].body.pos;
+                                let target=game_state.bots[playerid.0 as usize].body.pos;
                                 self.current_targets.push(PlayerState{playerid,name,target})
                             },
                             CommitType::Quit()=>{
@@ -174,6 +179,9 @@ impl CommitManager{
                     }
                     
                     self.moves = p.map(|a|(a.playerid,a.commit.assume_move().unwrap())).collect::<Vec<_>>().into_iter().peekable();
+                },
+                ServerToClient::GameStateRequest=>{
+                    ClientToServer::GameState(game_state.clone()).send(stream).unwrap();
                 },
                 _=>{
                     return Err(ProtErr)
@@ -193,7 +201,7 @@ impl CommitManager{
         }
 
         self.count+=1;
-        if self.count==12{ //200ms lag
+        if self.count==18{ //300ms lag
             self.count=0;
         }
 
@@ -208,16 +216,19 @@ use std::net::TcpStream;
 use steer::net::*;
 use steer::game::PlayerState;
 
-pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
+pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
     let window_dim:Rect<F32n>=dim;//rect(0.0,800.0,0.0,600.0*2.0).inner_try_into().unwrap();
 
 
-    
+    use std::convert::TryInto;
+    let gameid:u64=args[1].parse::<u64>()?;
+
     let mut game=game::Game::new();
     
-    
     let mut stream = TcpStream::connect("localhost:3333")?;
-    ClientToServer::JoinRequest(0,[1;8]).send(&mut stream)?;
+    
+    
+    ClientToServer::JoinRequest(gameid,[1;8]).send(&mut stream)?;
     println!("sent join request");
 
     let name=[0u8;8];
@@ -258,7 +269,7 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
 
 
 
-    let mut commit_manager=CommitManager::new(myplayerid,name,|p|game.state.bots[p.0 as usize].body.pos);
+    let mut commit_manager=CommitManager::new(myplayerid,name,&game.state);
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
@@ -278,7 +289,7 @@ pub fn make_demo(dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dy
 
 
         {   //TODO maybe do this in a different orer???
-            let player_moves=commit_manager.tick(commit,myplayerid,&mut stream,|p|game.state.bots[p.0 as usize].body.pos).unwrap();
+            let player_moves=commit_manager.tick(commit,myplayerid,&mut stream,&game.state).unwrap();
             game.step(player_moves,canvas);
         }
 
