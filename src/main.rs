@@ -20,7 +20,6 @@ use glutin::event_loop::ControlFlow;
 
 
 
-
 pub struct Demo(Box<dyn FnMut(Vec2<F32n>,bool, &mut SimpleCanvas, bool)>);
 impl Demo {
     pub fn new(func: impl FnMut(Vec2<F32n>, bool,&mut SimpleCanvas, bool) + 'static) -> Self {
@@ -38,7 +37,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
 
-    let area = vec2(800*2, 600);
+    let area = vec2(800, 600);
 
     let events_loop = glutin::event_loop::EventLoop::new();
 
@@ -354,10 +353,22 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
 
 
-        let mut circles = canvas.circles();
-        circles.add(bots[myplayerid.0 as usize].body.pos.into());
-        circles.send_and_uniforms(canvas,diameter-1.0).with_color([1.0,0.0,0.0,1.0]).draw();
+        for &PlayerState{playerid,name,target} in commit_manager.current_targets.iter(){
+            fn playerid_to_color(id:PlayerID)->[f32;4]{
+                let f=id.0 as f32; //between 0 and like 20
+                [(f*6.2)%1.0,(f*2.4)%1.0,(f*4.8)%1.0,1.0]
+            }
+            let c=playerid_to_color(playerid);
+            let bpos=bots[playerid.0 as usize].body.pos;
 
+            let mut lines=canvas.lines(1.5);
+            lines.add(bpos.into(),target.into());
+            lines.send_and_uniforms(canvas).with_color(c).draw();
+
+            let mut circles = canvas.circles();
+            circles.add(bpos.into());
+            circles.send_and_uniforms(canvas,diameter-1.0).with_color(c).draw();
+        }
         
         let mut lines=canvas.lines(2.0);
         for b in bots.iter(){
