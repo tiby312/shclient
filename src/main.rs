@@ -135,19 +135,24 @@ pub struct CommitManager{
     commits:Vec<Move> //for ourselves
 }
 impl CommitManager{
-    fn new(playerid:PlayerID,name:[u8;8],game_state:&GameState)->CommitManager{
-        let current_targets=vec!(PlayerState{playerid,name,target:game_state.bots[playerid.0 as usize].body.pos});
+    fn new(playerid:PlayerID,name:[u8;8],other_players:Vec<(PlayerID,[u8;8])>,game_state:&GameState)->CommitManager{
+        let mut current_targets=vec!(PlayerState{playerid,name,target:game_state.bots[playerid.0 as usize].body.pos});
+
+        for (playerid,name) in other_players.into_iter(){
+            current_targets.push(PlayerState{playerid,name, target:game_state.bots[playerid.0 as usize].body.pos });
+        }
+        //other_players.into_iter()
         let moves=vec!().into_iter().peekable();
         CommitManager{count:0,moves,current_targets,commits:Vec::new()}
     }
 
     //call this 60 times a second
-    fn tick(&mut self,commit:Option<Vec2<f32>>,playerid:PlayerID,stream:&mut TcpStream,game_state:&GameState)->Result<&[PlayerState],ProtErr>{
+    fn tick(&mut self,commit:Option<Vec2<f32>>,myplayerid:PlayerID,stream:&mut TcpStream,game_state:&GameState)->Result<&[PlayerState],ProtErr>{
         
         if self.count==0{    
             //TODO This can happen in parallel with the below if its slow
             println!("sending={:?}",&self.commits);
-            ClientToServer::Commit(playerid,self.commits.clone()).send(stream).unwrap();
+            ClientToServer::Commit(myplayerid,self.commits.clone()).send(stream).unwrap();
             println!("sent commits!");
             self.commits.clear();
 
@@ -163,11 +168,17 @@ impl CommitManager{
                         let Commit{playerid,commit}=p.next().unwrap();
                         match commit{
                             CommitType::Join(name)=>{
-                                //handle
-                                let target=game_state.bots[playerid.0 as usize].body.pos;
-                                self.current_targets.push(PlayerState{playerid,name,target})
+                                if playerid==myplayerid{
+                                    println!("Received join message for ourselves. this is expected. ignoring");
+                                }else{
+                                    //dbg!("received a join from playerid={:?}",playerid);
+                                    //handle
+                                    let target=game_state.bots[playerid.0 as usize].body.pos;
+                                    self.current_targets.push(PlayerState{playerid,name,target})
+                                }
                             },
                             CommitType::Quit()=>{
+                                dbg!("this player quit! {:?}",playerid);
                                 let (index,_)=self.current_targets.iter().enumerate().find(|(i,e)|e.playerid==playerid).ok_or(ProtErr)?;
                                 self.current_targets.remove(index);
 
@@ -232,21 +243,23 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     println!("sent join request");
 
     let name=[0u8;8];
-    let myplayerid=match ServerToClient::receive(&mut stream)?{
+    let (myplayerid,other_players)=match ServerToClient::receive(&mut stream)?{
         ServerToClient::StartNewGame(playerid)=>{
-            playerid
+            (playerid,Vec::new())
         },
-        ServerToClient::ReceiveGameState(state,playerid)=>{
+        ServerToClient::ReceiveGameState(state,playerid,other_players)=>{
             game.state=state;
-            playerid
+            (playerid,other_players)
         },
         _=>{
             panic!("error!");
         }
     };
 
-    dbg!("tada!!!!");
+    let mut commit_manager=CommitManager::new(myplayerid,name,other_players,&game.state);
 
+
+    println!("MY PLAYER ID={:?}",myplayerid);
     
 
     let wall_save={
@@ -269,7 +282,6 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
 
 
-    let mut commit_manager=CommitManager::new(myplayerid,name,&game.state);
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
@@ -343,7 +355,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
 
         let mut circles = canvas.circles();
-        circles.add(bots[0].body.pos.into());
+        circles.add(bots[myplayerid.0 as usize].body.pos.into());
         circles.send_and_uniforms(canvas,diameter-1.0).with_color([1.0,0.0,0.0,1.0]).draw();
 
         
