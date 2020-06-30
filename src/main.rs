@@ -135,6 +135,21 @@ impl PlayerStates{
     fn new()->PlayerStates{
         PlayerStates{current_targets:Vec::new()}
     }
+    fn update(&mut self,playerevents:Vec<PlayerEvent>,games:&GameState){
+        for a in playerevents.into_iter(){
+            match a{
+                PlayerEvent::Join(playerid,name)=>{
+                    let target=games.bots[playerid.0 as usize].body.pos;
+                    self.current_targets.push(PlayerState{playerid,name,target})
+                },
+                PlayerEvent::Quit(playerid)=>{
+                    let l=self.current_targets.len();
+                    self.current_targets.retain(|a|a.playerid!=playerid);
+                    assert_eq!(self.current_targets.len(),l);
+                }
+            }
+        }
+    }
 }
 
 
@@ -152,13 +167,13 @@ impl MoveSession{
     fn new(moves:Vec<(PlayerID,Move)>,game_state_req:bool)->MoveSession{
         MoveSession{count:0,moves:moves.into_iter().peekable(),mycommits:Vec::new(),game_state_req}
     }
-    fn advance_game_state(&mut self,players:&mut PlayerStates,myCommit:Option<Vec2<f32>>,game:&mut game::Game,canvas:&mut SimpleCanvas)-> SessionResult {
+    fn advance_game_state(&mut self,players:&mut PlayerStates,my_commit:Option<Vec2<f32>>,game:&mut game::Game,canvas:&mut SimpleCanvas)-> SessionResult {
         const FRAME_LENGTH:u8=60;
         if self.count>=FRAME_LENGTH{
             return SessionResult::NotFinished
         }
 
-        if let Some(target)=myCommit{
+        if let Some(target)=my_commit{
             self.mycommits.push(Move{target,tick:self.count});
         }
         
@@ -195,13 +210,11 @@ impl MoveSession{
 
 use std::net::TcpStream;
 use steer::net::*;
-use steer::game::PlayerState;
 
 pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
     let window_dim:Rect<F32n>=dim;//rect(0.0,800.0,0.0,600.0*2.0).inner_try_into().unwrap();
 
 
-    use std::convert::TryInto;
     let gameid:u64=args[1].parse::<u64>()?;
 
     let mut game=game::Game::new();
@@ -213,20 +226,40 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     ClientToServer::JoinRequest{gameid,name:myname}.send(&mut stream)?;
     println!("sent join request");
 
-    let (myplayerid,other_players)=match ServerToClient::receive(&mut stream)?{
+    let mut player_states=PlayerStates::new();
+
+
+    let myplayerid=match ServerToClient::receive(&mut stream)?{
         ServerToClient::StartNewGame(playerid)=>{
-            (playerid,Vec::new())
+            playerid
         },
-        ServerToClient::ReceiveGameState{state,commits,playerid,existing_players}=>{
-            //TODO play through one iteration of the game
+        ServerToClient::ReceiveGameState{state,commits,playerid,mut existing_players}=>{
+            //set the initial players
+            core::mem::swap(&mut player_states.current_targets,&mut existing_players);
             game.state=*state;
-            (playerid,existing_players)
+
+            let mut m=MoveSession::new(commits,false);
+            while let SessionResult::NotFinished =m.advance_game_state(&mut player_states,None,&mut game,canvas){
+                //do nothing.
+            }
+
+            playerid
         },
         _=>{
             panic!("error!");
         }
     };
 
+  
+    let mut active_move_session=if let ServerToClient::ServerClientNominal{playerevent,commits,game_state:None}
+                                            =ServerToClient::receive(&mut stream).unwrap(){
+        player_states.update(playerevent,&game.state);
+                
+        //handle joins/quits
+        Some(MoveSession::new(commits,false))
+    }else{
+        panic!("errrr")
+    };
     
 
     println!("MY PLAYER ID={:?}",myplayerid);
@@ -248,60 +281,37 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         squares.save(canvas)
     };
 
-    let mut player_states=PlayerStates::new();
-
+    
 
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
 
         let mycommit=if mouse_active{
-            //convert window coordicate to game coordinate
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
             let p=game.state.bots[myplayerid.0 as usize].body.pos;
             let mtarget=-half+target+p;
-            //commit_manager.add_commit(mtarget);
             Some(mtarget)
         }else{
             None
         };
 
-        let mut active_move_session:Option<MoveSession>=None;        
-        if let SessionResult::Finished(mycommits,state)=active_move_session.unwrap().advance_game_state(&mut player_states,mycommit,&mut game,canvas){
-            
-            //TOOD update playerStates
 
-            if let Some(g)=&state{
-                //we are tasked with sending game state
-            }
+        if let SessionResult::Finished(mycommits,state)=active_move_session.as_mut().unwrap().advance_game_state(&mut player_states,mycommit,&mut game,canvas){
+            
             //send out
             let moves=mycommits;
-            ClientToServer::Commit{moves,state}.send(&mut stream).unwrap();
-            
-
-            if let ServerToClient::ServerClientNominal{joins,quits,commits,game_state:None}=ServerToClient::receive(&mut stream).unwrap(){
+            ClientToServer::Commit{moves,state}.send(&mut stream).unwrap();    
+        
+            if let ServerToClient::ServerClientNominal{playerevent,commits,game_state:None}=ServerToClient::receive(&mut stream).unwrap(){
+                player_states.update(playerevent,&game.state);
                 //handle joins/quits
                 active_move_session=Some(MoveSession::new(commits,false));
             }else{
                 panic!("errrr")
             }
-
         }
-
-        
-        
-
-
-
-        /*
-        {   //TODO maybe do this in a different orer???
-            let player_moves=commit_manager.tick(commit,myplayerid,&mut stream,&game.state).unwrap();
-            game.step(player_moves,canvas);
-        }
-        */
-
-
-
+            
 
         //convert game coordinate to window coordinate
         let p=game.state.bots[myplayerid.0 as usize].body.pos;
@@ -349,12 +359,14 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
 
 
-        for &PlayerState{playerid,name,target} in player_states.current_targets.iter(){
+        for PlayerState{playerid,name,target} in player_states.current_targets.iter(){
+            let _name=name;
+            let target=*target;
             fn playerid_to_color(id:PlayerID)->[f32;4]{
                 let f=id.0 as f32; //between 0 and like 20
                 [(f*6.2)%1.0,(f*2.4)%1.0,(f*4.8)%1.0,1.0]
             }
-            let c=playerid_to_color(playerid);
+            let c=playerid_to_color(*playerid);
             let bpos=bots[playerid.0 as usize].body.pos;
 
             let mut lines=canvas.lines(1.5);
