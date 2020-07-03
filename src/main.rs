@@ -177,10 +177,18 @@ impl MoveSession{
             self.mycommits.push(Move{target,tick:self.count});
         }
         
-        while self.moves.peek().is_some(){
+        while let Some((_,m))=self.moves.peek(){
+            if m.tick>self.count{
+                break;
+            }
+            //dbg!(&players.current_targets.get(0));
+        
             let (playerid,m) = self.moves.next().unwrap();
-            let p=players.current_targets.iter_mut().find(|o|o.playerid==playerid).unwrap();
+            
+            let p:&mut PlayerState=players.current_targets.iter_mut().find(|o|o.playerid==playerid).unwrap();
             p.target=m.target;
+            //dbg!(&players.current_targets.get(0));
+        
         }
 
         game.step(&players.current_targets,canvas);
@@ -206,6 +214,17 @@ impl MoveSession{
 
 
 
+struct PlayerStream(TcpStream);
+impl PlayerStream{
+    fn get_mut(&mut self)->&mut TcpStream{
+        &mut self.0
+    }
+}
+impl Drop for PlayerStream{
+    fn drop(&mut self){
+        ClientToServer::Quit.send(&mut self.0);
+    }
+}
 
 
 use std::net::TcpStream;
@@ -219,24 +238,24 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
     let mut game=game::Game::new();
     
-    let mut stream = TcpStream::connect("localhost:3333")?;
+    let mut stream = PlayerStream(TcpStream::connect("localhost:3333")?);
     
     
     let myname=PlayerName([0u8;8]);    
-    ClientToServer::JoinRequest{gameid,name:myname}.send(&mut stream)?;
+    ClientToServer::JoinRequest{gameid,name:myname}.send(stream.get_mut())?;
     println!("sent join request");
 
     let mut player_states=PlayerStates::new();
 
 
-    let myplayerid=match ServerToClient::receive(&mut stream)?{
+    let myplayerid=match ServerToClient::receive(stream.get_mut())?{
         ServerToClient::StartNewGame(playerid)=>{
             playerid
         },
-        ServerToClient::ReceiveGameState{state,commits,playerid,mut existing_players}=>{
+        ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
             //set the initial players
-            core::mem::swap(&mut player_states.current_targets,&mut existing_players);
-            game.state=*state;
+            core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
+            game.state=*metastate.state;
 
             let mut m=MoveSession::new(commits,false);
             while let SessionResult::NotFinished =m.advance_game_state(&mut player_states,None,&mut game,canvas){
@@ -250,10 +269,11 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         }
     };
 
+    dbg!(myplayerid);
   
-    let mut active_move_session=if let ServerToClient::ServerClientNominal{playerevent,commits,game_state:None}
-                                            =ServerToClient::receive(&mut stream).unwrap(){
-        player_states.update(playerevent,&game.state);
+    let mut active_move_session=if let ServerToClient::ServerClientNominal{playerevents,commits,game_state:None}
+                                            =ServerToClient::receive(stream.get_mut()).unwrap(){
+        player_states.update(playerevents,&game.state);
                 
         //handle joins/quits
         Some(MoveSession::new(commits,false))
@@ -285,7 +305,6 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
-
         let mycommit=if mouse_active{
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
@@ -299,17 +318,40 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
         if let SessionResult::Finished(mycommits,state)=active_move_session.as_mut().unwrap().advance_game_state(&mut player_states,mycommit,&mut game,canvas){
             
+            let state=state.map(|state|{
+                let existing_players=player_states.current_targets.clone();
+                MetaGameState{state,existing_players}
+            });
+
             //send out
             let moves=mycommits;
-            ClientToServer::Commit{moves,state}.send(&mut stream).unwrap();    
+            ClientToServer::Commit{playerid:myplayerid,moves,state}.send(stream.get_mut()).unwrap();    
         
-            if let ServerToClient::ServerClientNominal{playerevent,commits,game_state:None}=ServerToClient::receive(&mut stream).unwrap(){
-                player_states.update(playerevent,&game.state);
-                //handle joins/quits
-                active_move_session=Some(MoveSession::new(commits,false));
-            }else{
-                panic!("errrr")
+            use ServerToClient::*;
+            match ServerToClient::receive(stream.get_mut()).unwrap(){
+                ServerClientNominal{playerevents,commits,game_state}=>{
+                    let respond=if let Some(g)=game_state{
+                        if g.source_player==myplayerid{
+                            true
+                        }else{
+                            false
+                        }
+                    }else{
+                        false
+                    };
+                    player_states.update(playerevents,&game.state);
+                    //handle joins/quits
+                    active_move_session=Some(MoveSession::new(commits,respond));
+                },
+                ReceiveGameState{metastate,commits,playerid}=>{
+                    panic!("received game state?? {:?}",(metastate,commits,playerid));
+                },
+                StartNewGame(playerid)=>{
+                    panic!("received new player?? {:?}",playerid);
+
+                }
             }
+                
         }
             
 
