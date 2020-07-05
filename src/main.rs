@@ -8,7 +8,7 @@ use egaku2d::*;
 use duckduckgeo;
 
 use steer::*;
-
+use steer::game::NetGameState;
 
 use egaku2d::glutin;
 use glutin::event::ElementState;
@@ -139,7 +139,7 @@ impl PlayerStates{
         for a in playerevents.into_iter(){
             match a{
                 PlayerEvent::Join(playerid,name)=>{
-                    let target=games.bots[playerid.0 as usize].body.pos;
+                    let target=games.bots[playerid.0 as usize].0.body.pos;
                     self.current_targets.push(PlayerState{playerid,name,target})
                 },
                 PlayerEvent::Quit(playerid)=>{
@@ -256,7 +256,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
             //set the initial players
             core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
-            game.state=*metastate.state;
+            game.state=(*metastate.state).into();
 
             /*
             let mut m=MoveSession::new(commits,false);
@@ -311,7 +311,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         let mycommit=if mouse_active{
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
-            let p=game.state.bots[myplayerid.0 as usize].body.pos;
+            let p=game.state.bots[myplayerid.0 as usize].0.body.pos;
             let mtarget=-half+target+p;
             Some(mtarget)
         }else{
@@ -324,14 +324,16 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
             let hash={
                 let existing_players=player_states.current_targets.clone();
-                let m=MetaGameState{state:Box::new(game.state.clone()),existing_players};
+                let game:NetGameState<_>=game.state.clone().into();
+                let m=MetaGameState{state:Box::new(game),existing_players};
                 //dbg!("{:?}",&m);
                 m.as_ordered().unwrap().make_hash()
             };
 
             let state=state.map(|state|{
                 let existing_players=player_states.current_targets.clone();
-                MetaGameState{state,existing_players}
+                let k:GameState<_>=*state;
+                MetaGameState{state:Box::new(k.into()),existing_players}
             });
 
             //send out
@@ -367,7 +369,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
             
 
         //convert game coordinate to window coordinate
-        let p=game.state.bots[myplayerid.0 as usize].body.pos;
+        let p=game.state.bots[myplayerid.0 as usize].0.body.pos;
 
         let kk=-(p.inner_into::<f32>())+vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
         canvas.set_global_offset( kk.into());
@@ -379,11 +381,12 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         let diameter=radius*2.0;
         wall_save.uniforms(canvas,grid_viewport.spacing).with_color([0.4,0.2,0.2,1.0]).draw();
 
-
+        /*
         let xx=radius*1.5;
         let mut lines=canvas.lines(radius/2.0);
-        for b in bots.iter(){
+        for (b,_) in bots.iter(){
             let a=vec2(b.head.rot.cos(),b.head.rot.sin());
+            
             if b.ind.top(){
                 lines.add(b.body.pos.into(),(b.body.pos-a*xx).into());
             }else if b.ind.bottom(){
@@ -399,13 +402,13 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
             
         }
         lines.send_and_uniforms(canvas).with_color([1.0,0.0,0.0,0.5]).draw();
-        
+        */
 
 
 
         //Draw circles
         let mut circles = canvas.circles();
-        for b in bots.iter(){
+        for (b,_) in bots.iter(){
             circles.add(b.body.pos.into());
         }
         circles.send_and_uniforms(canvas,diameter-2.0).with_color([1.0, 1.0, 1.0, 1.0]).draw();
@@ -420,7 +423,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
                 [(f*6.2)%1.0,(f*2.4)%1.0,(f*4.8)%1.0,1.0]
             }
             let c=playerid_to_color(*playerid);
-            let bpos=bots[playerid.0 as usize].body.pos;
+            let bpos=bots[playerid.0 as usize].0.body.pos;
 
             let mut lines=canvas.lines(1.5);
             lines.add(bpos.into(),target.into());
@@ -432,7 +435,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         }
         
         let mut lines=canvas.lines(2.0);
-        for b in bots.iter(){
+        for (b,_) in bots.iter(){
             let rr=radius-1.0;
             lines.add(b.body.pos.into(),(b.body.pos+vec2(b.head.rot.cos(),b.head.rot.sin()) *rr).into() );
         }
