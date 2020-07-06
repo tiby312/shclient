@@ -131,7 +131,7 @@ use steer::game::GameState;
 
 
 enum SessionResult{
-    Finished(Vec<Move>,Option<Box<GameState<f32>>>),
+    Finished(Vec<Move>,Option<Box<GameState>>),
     NotFinished
 }
 pub struct MoveSession{
@@ -318,12 +318,13 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
                 m.as_ordered().unwrap().make_hash()
             };
             */
-            let netstate:NetGameState<_>=game.state.clone().into();
-            let hash=netstate.as_ordered().unwrap().make_hash();
+            use core::convert::TryFrom;
+            let netstate:NetGameState=TryFrom::try_from(game.state.clone()).unwrap();
+            let hash=netstate.make_hash();
 
             let state=state.map(|state|{
-                let k:GameState<_>=*state;
-                Box::new(k.into())
+                let k:GameState=*state;
+                Box::new(netstate)
             });
 
             //send out
