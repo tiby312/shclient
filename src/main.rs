@@ -370,28 +370,28 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         let diameter=radius*2.0;
         wall_save.uniforms(canvas,grid_viewport.spacing).with_color([0.4,0.2,0.2,1.0]).draw();
 
-        /*
+        
         let xx=radius*1.5;
         let mut lines=canvas.lines(radius/2.0);
-        for (b,_) in bots.iter(){
+        for (b,t) in bots.iter(){
             let a=vec2(b.head.rot.cos(),b.head.rot.sin());
             
-            if b.ind.top(){
+            if t.thrust_ind.top(){
                 lines.add(b.body.pos.into(),(b.body.pos-a*xx).into());
-            }else if b.ind.bottom(){
+            }else if t.thrust_ind.bottom(){
                 lines.add(b.body.pos.into(),(b.body.pos+a*xx).into());
             }
             
             let a=a.rotate_90deg_right();
-            if b.ind.left(){
+            if t.thrust_ind.left(){
                 lines.add(b.body.pos.into(),(b.body.pos-a*xx).into());
-            }else if b.ind.right(){
+            }else if t.thrust_ind.right(){
                 lines.add(b.body.pos.into(),(b.body.pos+a*xx).into());
             }
             
         }
         lines.send_and_uniforms(canvas).with_color([1.0,0.0,0.0,0.5]).draw();
-        */
+        
 
 
 
