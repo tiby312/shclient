@@ -243,7 +243,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
             //set the initial players
             //core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
-            game.state=(*metastate).into();
+            game.state=metastate.into();
 
             /*
             let mut m=MoveSession::new(commits,false);
@@ -322,9 +322,8 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
             let netstate:NetGameState=TryFrom::try_from(game.state.clone()).unwrap();
             let hash=netstate.make_hash();
 
-            let state=state.map(|state|{
-                let k:GameState=*state;
-                Box::new(netstate)
+            let state=state.map(|_|{
+                netstate
             });
 
             //send out
