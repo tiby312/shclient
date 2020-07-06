@@ -17,7 +17,7 @@ use glutin::event::VirtualKeyCode;
 use glutin::event::WindowEvent;
 use glutin::event_loop::ControlFlow;
 
-
+use steer::net::PlayerState;
 
 
 pub struct Demo(Box<dyn FnMut(Vec2<F32n>,bool, &mut SimpleCanvas, bool)>);
@@ -128,29 +128,6 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 use steer::game::GameState;
 
 
-struct PlayerStates{
-    current_targets:Vec<PlayerState<f32>>,
-}   
-impl PlayerStates{
-    fn new()->PlayerStates{
-        PlayerStates{current_targets:Vec::new()}
-    }
-    fn update(&mut self,playerevents:Vec<PlayerEvent>,games:&GameState<f32>){
-        for a in playerevents.into_iter(){
-            match a{
-                PlayerEvent::Join(playerid,name)=>{
-                    let target=games.bots[playerid.0 as usize].0.body.pos;
-                    self.current_targets.push(PlayerState{playerid,name,target})
-                },
-                PlayerEvent::Quit(playerid)=>{
-                    let l=self.current_targets.len();
-                    self.current_targets.retain(|a|a.playerid!=playerid);
-                    assert_eq!(self.current_targets.len(),l);
-                }
-            }
-        }
-    }
-}
 
 
 enum SessionResult{
@@ -160,14 +137,39 @@ enum SessionResult{
 pub struct MoveSession{
     count:u8,
     moves:std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>,
+    events:Option<Vec<PlayerEvent>>,
     mycommits:Vec<Move>,
     game_state_req:bool
 }
-impl MoveSession{
-    fn new(moves:Vec<(PlayerID,Move)>,game_state_req:bool)->MoveSession{
-        MoveSession{count:0,moves:moves.into_iter().peekable(),mycommits:Vec::new(),game_state_req}
+
+pub struct MoverIter<'a>{
+    tick:u8,
+    moves:&'a mut std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>
+}
+//TODO implement more traits
+impl Iterator for MoverIter<'_>{
+    type Item=(PlayerID,Vec2<f32>);
+    fn next(&mut self)->Option<Self::Item>{
+        if let Some((_,m))=self.moves.peek(){
+            if m.tick!=self.tick{
+                None
+            }else{
+                let (p,m)=self.moves.next().unwrap();
+                Some((p,m.target))
+            }
+        }else{
+            None
+        }
     }
-    fn advance_game_state(&mut self,players:&mut PlayerStates,my_commit:Option<Vec2<f32>>,game:&mut game::Game,canvas:&mut SimpleCanvas)-> SessionResult {
+}
+
+
+
+impl MoveSession{
+    fn new(events:Vec<PlayerEvent>,moves:Vec<(PlayerID,Move)>,game_state_req:bool)->MoveSession{
+        MoveSession{events:Some(events),count:0,moves:moves.into_iter().peekable(),mycommits:Vec::new(),game_state_req}
+    }
+    fn advance_game_state(&mut self,my_commit:Option<Vec2<f32>>,game:&mut game::Game,canvas:&mut SimpleCanvas)-> SessionResult {
         const FRAME_LENGTH:u8=5;
         if self.count>=FRAME_LENGTH{
             return SessionResult::NotFinished
@@ -177,22 +179,8 @@ impl MoveSession{
             self.mycommits.push(Move{target,tick:self.count});
         }
         
-        while let Some((_,m))=self.moves.peek(){
-            if m.tick>self.count{
-                break;
-            }
-            //dbg!(&players.current_targets.get(0));
-        
-            let (playerid,m) = self.moves.next().unwrap();
-            
-            let p=players.current_targets.iter_mut().find(|o|o.playerid==playerid).unwrap();
-            p.target=m.target;
-            //dbg!(&players.current_targets.get(0));
-        
-        }
-
-        //println!("targets={:?}",&players.current_targets);
-        game.step(&players.current_targets,canvas);
+        let m=MoverIter{ tick: self.count,moves:&mut self.moves};
+        game.step(self.events.take(),m,canvas);
 
         self.count+=1;
         if self.count==FRAME_LENGTH{
@@ -246,8 +234,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     ClientToServer::JoinRequest{gameid,name:myname}.send(stream.get_mut())?;
     println!("sent join request");
 
-    let mut player_states=PlayerStates::new();
-
+    
 
     let myplayerid=match ServerToClient::receive(stream.get_mut())?{
         ServerToClient::StartNewGame(playerid)=>{
@@ -255,8 +242,8 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         },
         ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
             //set the initial players
-            core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
-            game.state=(*metastate.state).into();
+            //core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
+            game.state=(*metastate).into();
 
             /*
             let mut m=MoveSession::new(commits,false);
@@ -276,10 +263,10 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
   
     let mut active_move_session=if let ServerToClient::ServerClientNominal{playerevents,commits,game_state:None}
                                             =ServerToClient::receive(stream.get_mut()).unwrap(){
-        player_states.update(playerevents,&game.state);
+        //player_states.update(playerevents,&game.state);
                 
         //handle joins/quits
-        Some(MoveSession::new(commits,false))
+        Some(MoveSession::new(playerevents,commits,false))
     }else{
         panic!("errrr")
     };
@@ -319,9 +306,10 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         };
         
 
-        if let SessionResult::Finished(mycommits,state)=active_move_session.as_mut().unwrap().advance_game_state(&mut player_states,mycommit,&mut game,canvas){
+        if let SessionResult::Finished(mycommits,state)=active_move_session.as_mut().unwrap().advance_game_state(mycommit,&mut game,canvas){
             println!("game tick={:?}!!!",game.state.tick);
 
+            /*
             let hash={
                 let existing_players=player_states.current_targets.clone();
                 let game:NetGameState<_>=game.state.clone().into();
@@ -329,11 +317,13 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
                 //dbg!("{:?}",&m);
                 m.as_ordered().unwrap().make_hash()
             };
+            */
+            let netstate:NetGameState<_>=game.state.clone().into();
+            let hash=netstate.as_ordered().unwrap().make_hash();
 
             let state=state.map(|state|{
-                let existing_players=player_states.current_targets.clone();
                 let k:GameState<_>=*state;
-                MetaGameState{state:Box::new(k.into()),existing_players}
+                Box::new(k.into())
             });
 
             //send out
@@ -352,9 +342,8 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
                     }else{
                         false
                     };
-                    player_states.update(playerevents,&game.state);
                     //handle joins/quits
-                    active_move_session=Some(MoveSession::new(commits,respond));
+                    active_move_session=Some(MoveSession::new(playerevents,commits,respond));
                 },
                 ReceiveGameState{metastate,commits,playerid}=>{
                     panic!("received game state?? {:?}",(metastate,commits,playerid));
@@ -415,7 +404,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
 
 
 
-        for PlayerState{playerid,name,target} in player_states.current_targets.iter(){
+        for PlayerState{playerid,name,target} in game.state.player_states.iter(){
             let _name=name;
             let target=*target;
             fn playerid_to_color(id:PlayerID)->[f32;4]{
