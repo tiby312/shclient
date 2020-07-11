@@ -140,6 +140,7 @@ impl PreMove{
     fn new()->Self{
         PreMove{mycommits:Vec::new(),game_state_req:false,count:0}
     }
+
     fn advance(&mut self,playerid:PlayerID,my_commit:Option<Vec2<f32>>,game:&GameState)->Option<ClientToServer>{
         if let Some(target)=my_commit{
             let tick=self.count;
@@ -260,45 +261,46 @@ pub struct Manager{
 }
 impl Manager{
 
-    fn new(gameid:u64,name:PlayerName)->(Manager,ClientToServer){
-        (Manager{playerid:PlayerID(0),gameid,name,game:game::Game::new(),premove:PreMove::new(),sess:None},ClientToServer::JoinRequest{gameid,name})
+    fn prep(gameid:u64,name:PlayerName)->ClientToServer{
+        ClientToServer::JoinRequest{gameid,name}
     }
-    fn new2(&mut self,a:ServerToClient,b:ServerToClient){
-
-        let myplayerid=match a{
+    fn new(gameid:u64,name:PlayerName,a:ServerToClient,b:ServerToClient,canvas:&mut SimpleCanvas)->Manager{
+        
+        let (playerid,game)=match a{
             ServerToClient::StartNewGame(playerid)=>{
-                playerid
+                (playerid,game::Game::new())
             },
             ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
                 //set the initial players
                 //core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
-                self.game.state=metastate.into();
-
-                /*
-                let mut m=MoveSession::new(commits,false);
-                while let SessionResult::NotFinished =m.advance_game_state(&mut player_states,None,&mut game,canvas){
-                    //do nothing.
-                }
-                */
-
-                playerid
+                let mut game=game::Game::new();
+                game.state=metastate.into();
+                
+                
+                let mut m=MoveSession::new(Vec::new(),commits,false);
+                //Advance the word by one more since the hash is always a hash of one tick behind (for performance)
+                let k=m.advance_game_state(&mut game,canvas);
+                
+                
+                (playerid,game)
             },
             _=>{
                 panic!("error!");
             }
         };
 
-        self.playerid=myplayerid;
+        
 
-
-        self.sess=if let ServerToClient::ServerClientNominal{playerevents,commits,game_state:None}
-                =b{
+        let sess=if let ServerToClient::ServerClientNominal{playerevents,commits,game_state:None}=b{
 
                 //handle joins/quits
                 Some(MoveSession::new(playerevents,commits,false))
         }else{
             panic!("errrr")
         };
+
+        Manager{playerid,gameid,name,game,premove:PreMove::new(),sess}
+
 
     }
 
@@ -313,7 +315,7 @@ impl Manager{
 
     //only call this if premove() returned some.
     fn recv(&mut self,s:Option<ServerToClient>,canvas:&mut SimpleCanvas){
-
+        
 
         if let SessionResult::Finished=self.sess.as_mut().unwrap().advance_game_state(&mut self.game,canvas){
             println!("game tick={:?}!!!",self.game.state.tick);
@@ -331,6 +333,9 @@ impl Manager{
                     }else{
                         false
                     };
+
+                    self.premove.game_state_req=respond;
+
                     //handle joins/quits
                     self.sess=Some(MoveSession::new(playerevents,commits,respond));
                 },
@@ -367,14 +372,14 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     let mut stream = PlayerStream(TcpStream::connect("localhost:3333")?);
     
     
-    //let myname=PlayerName([0u8;8]);    
-    let (mut m,cs)=Manager::new(gameid,PlayerName([0;8]));
-    cs.send(stream.get_mut())?;
+    let myname=PlayerName([0u8;8]);    
+    
+    Manager::prep(gameid,myname).send(stream.get_mut())?;
 
     //println!("sent join request");
     let a1=stream.recv()?;
     let a2=stream.recv()?;
-    m.new2(a1,a2);
+    let mut m=Manager::new(gameid,myname,a1,a2,canvas);
     
 
     
