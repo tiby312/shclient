@@ -25,3 +25,8 @@ duckduckgeo={path="../duckduckgeo"}
 
 [patch.crates-io]
 axgeom={path="../axgeom"}
+
+
+
+#[profile.release]
+#lto = true
