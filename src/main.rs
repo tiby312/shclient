@@ -1,14 +1,14 @@
 extern crate axgeom;
-extern crate dinotree_alg;
+//extern crate dinotree_alg;
 
-use duckduckgeo::F32n;
+//use duckduckgeo::F32n;
 use axgeom::*;
 
 use egaku2d::*;
-use duckduckgeo;
+//use duckduckgeo;
 
-use steer::*;
-use steer::game::NetGameState;
+//use steer::*;
+//use steer::game::NetGameState;
 
 use egaku2d::glutin;
 use glutin::event::ElementState;
@@ -17,8 +17,23 @@ use glutin::event::VirtualKeyCode;
 use glutin::event::WindowEvent;
 use glutin::event_loop::ControlFlow;
 
-use steer::net::PlayerState;
+//use steer::net::PlayerState;
+use shclient_gen::*;
 
+struct PlayerStream(TcpStream);
+impl PlayerStream{
+    fn get_mut(&mut self)->&mut TcpStream{
+        &mut self.0
+    }
+    fn recv(&mut self)->Result<ServerToClient,ProtErr>{
+        ServerToClient::receive(self.get_mut())
+    }
+}
+impl Drop for PlayerStream{
+    fn drop(&mut self){
+        ClientToServer::Quit.send(&mut self.0);
+    }
+}
 
 pub struct Demo(Box<dyn FnMut(Vec2<F32n>,bool, &mut SimpleCanvas, bool)>);
 impl Demo {
@@ -123,243 +138,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
 
 
-
-
-use steer::game::GameState;
-
-
-
-
-
-pub struct PreMove{
-    mycommits:Vec<Move>,
-    game_state_req:bool,
-    count:u8
-}
-impl PreMove{
-    fn new()->Self{
-        PreMove{mycommits:Vec::new(),game_state_req:false,count:0}
-    }
-
-    fn advance(&mut self,playerid:PlayerID,my_commit:Option<Vec2<f32>>,game:&GameState)->Option<ClientToServer>{
-        if let Some(target)=my_commit{
-            let tick=self.count;
-            self.mycommits.push(Move{tick,target});
-        }
-
-        let c=if self.count==FRAME_LENGTH-1{
-            use core::convert::TryFrom;
-        
-            
-            let netstate:NetGameState=TryFrom::try_from(game.clone()).unwrap();
-            let hash=netstate.make_hash();
-
-            let state=if self.game_state_req{
-                self.game_state_req=false;
-                Some(netstate)
-            }else{
-                None
-            };
-
-            //send out
-            let moves=self.mycommits.clone(); //TODO optimize
-            Some(ClientToServer::Commit{playerid,moves,state,hash})
-        }else{
-            None
-        };
-        self.count+=1;
-        c
-    }
-}
-
-
-
-pub struct MoverIter<'a>{
-    tick:u8,
-    moves:&'a mut std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>
-}
-//TODO implement more traits
-impl Iterator for MoverIter<'_>{
-    type Item=(PlayerID,Vec2<f32>);
-    fn next(&mut self)->Option<Self::Item>{
-        if let Some((_,m))=self.moves.peek(){
-            if m.tick!=self.tick{
-                None
-            }else{
-                let (p,m)=self.moves.next().unwrap();
-                Some((p,m.target))
-            }
-        }else{
-            None
-        }
-    }
-}
-
-
-const FRAME_LENGTH:u8=5;
-
-
-enum SessionResult{
-    Finished,
-    NotFinished
-}
-pub struct MoveSession{
-    count:u8,
-    moves:std::iter::Peekable<std::vec::IntoIter<(PlayerID,Move)>>,
-    events:Option<Vec<PlayerEvent>>,
-}
-
-impl MoveSession{
-    fn new(events:Vec<PlayerEvent>,moves:Vec<(PlayerID,Move)>,game_state_req:bool)->MoveSession{
-        MoveSession{events:Some(events),count:0,moves:moves.into_iter().peekable()}
-    }
-    fn advance_game_state(&mut self,game:&mut game::Game,canvas:&mut SimpleCanvas)-> SessionResult {
-        
-        
-        let m=MoverIter{ tick: self.count,moves:&mut self.moves};
-        game.step(self.events.take(),m,canvas);
-
-        self.count+=1;
-        if self.count==FRAME_LENGTH{
-            assert!(self.moves.next().is_none());
-            SessionResult::Finished
-        }else{
-            SessionResult::NotFinished
-        }
-    }
-}
-
-
-
-
-
-struct PlayerStream(TcpStream);
-impl PlayerStream{
-    fn get_mut(&mut self)->&mut TcpStream{
-        &mut self.0
-    }
-    fn recv(&mut self)->Result<ServerToClient,ProtErr>{
-        ServerToClient::receive(self.get_mut())
-    }
-}
-impl Drop for PlayerStream{
-    fn drop(&mut self){
-        ClientToServer::Quit.send(&mut self.0);
-    }
-}
-
-
-
-
-pub struct Manager{
-    playerid:PlayerID,
-    gameid:u64,
-    name:PlayerName,
-    game:game::Game,
-    premove:PreMove,
-    sess:Option<MoveSession>
-}
-impl Manager{
-
-    fn prep(gameid:u64,name:PlayerName)->ClientToServer{
-        ClientToServer::JoinRequest{gameid,name}
-    }
-    fn new(gameid:u64,name:PlayerName,a:ServerToClient,b:ServerToClient,canvas:&mut SimpleCanvas)->Manager{
-        
-        let (playerid,game)=match a{
-            ServerToClient::StartNewGame(playerid)=>{
-                (playerid,game::Game::new())
-            },
-            ServerToClient::ReceiveGameState{mut metastate,commits,playerid}=>{
-                //set the initial players
-                //core::mem::swap(&mut player_states.current_targets,&mut metastate.existing_players);
-                let mut game=game::Game::new();
-                game.state=metastate.into();
-                
-                
-                let mut m=MoveSession::new(Vec::new(),commits,false);
-                //Advance the word by one more since the hash is always a hash of one tick behind (for performance)
-                let k=m.advance_game_state(&mut game,canvas);
-                
-                
-                (playerid,game)
-            },
-            _=>{
-                panic!("error!");
-            }
-        };
-
-        
-
-        let sess=if let ServerToClient::ServerClientNominal{playerevents,commits,game_state:None}=b{
-
-                //handle joins/quits
-                Some(MoveSession::new(playerevents,commits,false))
-        }else{
-            panic!("errrr")
-        };
-
-        Manager{playerid,gameid,name,game,premove:PreMove::new(),sess}
-
-
-    }
-
-    fn premove(&mut self,mycommit:Option<Vec2<f32>>)->Option<ClientToServer>{
-        if let Some(c)=self.premove.advance(self.playerid,mycommit,&self.game.state){
-            self.premove=PreMove::new();
-            Some(c)
-        }else{
-            None
-        }
-    }
-
-    //only call this if premove() returned some.
-    fn recv(&mut self,s:Option<ServerToClient>,canvas:&mut SimpleCanvas){
-        
-
-        if let SessionResult::Finished=self.sess.as_mut().unwrap().advance_game_state(&mut self.game,canvas){
-            println!("game tick={:?}!!!",self.game.state.tick);
-
-            
-            use ServerToClient::*;
-            match s.unwrap(){
-                ServerClientNominal{playerevents,commits,game_state}=>{
-                    let respond=if let Some(g)=game_state{
-                        if g.source_player==self.playerid{
-                            true
-                        }else{
-                            false
-                        }
-                    }else{
-                        false
-                    };
-
-                    self.premove.game_state_req=respond;
-
-                    //handle joins/quits
-                    self.sess=Some(MoveSession::new(playerevents,commits,respond));
-                },
-                ReceiveGameState{metastate,commits,playerid}=>{
-                    panic!("received game state?? {:?}",(metastate,commits,playerid));
-                },
-                StartNewGame(playerid)=>{
-                    panic!("received new player?? {:?}",playerid);
-
-                }
-            }
-                
-        }else{
-            assert!(s.is_none());
-        }
-            
-    }
-}
-
-        
-
-
 use std::net::TcpStream;
-use steer::net::*;
+//use steer::net::*;
 
 pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> Result<Demo,Box<dyn std::error::Error>> {
     let window_dim:Rect<F32n>=dim;//rect(0.0,800.0,0.0,600.0*2.0).inner_try_into().unwrap();
@@ -386,7 +166,7 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     
     
     let wall_save={
-        let game=&m.game;    
+        let game=&m.get_game();    
 
         let walls=&game.nonstate.walls;
         let grid_viewport=&game.nonstate.grid_viewport;
@@ -408,10 +188,10 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
     let d=Demo::new(move |cursor, mouse_active,canvas, _check_naive| {
         
         let mycommit=if mouse_active{
-            let myplayerid=m.playerid;
+            let myplayerid=m.get_playerid();
             let target=cursor.inner_into();
             let half=vec2(window_dim.x.distance().into_inner(),window_dim.y.distance().into_inner())/2.0;
-            let p=m.game.state.bots[myplayerid.0 as usize].0.body.pos;
+            let p=m.get_game().state.bots[myplayerid.0 as usize].0.body.pos;
             let mtarget=-half+target+p;
             Some(mtarget)
         }else{
@@ -428,8 +208,8 @@ pub fn make_demo(args:Vec<String>,dim: Rect<F32n>,canvas:&mut SimpleCanvas) -> R
         }
 
 
-        let myplayerid=m.playerid;
-        let game=&m.game;            
+        let myplayerid=m.get_playerid();
+        let game=&m.get_game();            
 
         //convert game coordinate to window coordinate
         let p=game.state.bots[myplayerid.0 as usize].0.body.pos;
